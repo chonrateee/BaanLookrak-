@@ -7,6 +7,9 @@ import RoomPage from './pages/RoomPage'
 import BillsPage from './pages/BillsPage'
 import RepairPage from './pages/RepairPage'
 import AnnouncementsPage from './pages/AnnouncementsPage'
+import AdminPage from './pages/admin'
+import AdminRoute from './components/AdminRoute'
+import AdminLoginPage from './pages/AdminLoginPage'
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth()
@@ -35,6 +38,10 @@ export default function App() {
         } />
         <Route path="/announcements" element={
           <PrivateRoute><AnnouncementsPage /></PrivateRoute>
+        } />
+        <Route path="/admin-login" element={<AdminLoginPage />} />
+        <Route path="/admin" element={
+          <AdminRoute><AdminPage /></AdminRoute>
         } />
       </Routes>
     </BrowserRouter>

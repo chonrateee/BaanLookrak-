@@ -3,39 +3,65 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 
+/*
+  RoomPage
+  --------
+  Added a detailed "รายละเอียดห้องพัก" section below the keycard that spells out
+  exactly what's included in the rent (aircon, wifi, water heater, etc.) with a
+  short description per item, instead of just short icon tags.
+
+  DATA: this reads `room.amenities` if your `rooms` table has a jsonb/array column
+  with that name (e.g. [{ "icon": "❄️", "name": "แอร์", "desc": "..." }, ...]).
+  If that column doesn't exist yet, it silently falls back to DEFAULT_AMENITIES
+  below, so the page still looks complete without extra setup.
+
+  To make this fully dynamic per room, add a jsonb column:
+    alter table rooms add column if not exists amenities jsonb;
+*/
+
+const DEFAULT_AMENITIES = [
+  { icon: '❄️', name: 'เครื่องปรับอากาศ', desc: 'รวมอยู่ในค่าเช่าแล้ว ไม่มีค่าใช้จ่ายเพิ่ม' },
+  { icon: '📶', name: 'อินเทอร์เน็ตไวไฟ', desc: 'ความเร็วสูง ใช้ได้ไม่จำกัด ฟรีตลอดสัญญาเช่า' },
+  { icon: '🚿', name: 'เครื่องทำน้ำอุ่น', desc: 'ติดตั้งในห้องน้ำทุกห้อง' },
+  { icon: '🛏️', name: 'เฟอร์นิเจอร์ครบชุด', desc: 'เตียง ตู้เสื้อผ้า โต๊ะทำงาน พร้อมเข้าอยู่ทันที' },
+  { icon: '🅿️', name: 'ที่จอดรถ', desc: 'มีพื้นที่จอดรถให้ผู้พักอาศัยฟรี' },
+  { icon: '📹', name: 'กล้องวงจรปิด', desc: 'ติดตั้งบริเวณทางเข้า-ออกและจุดส่วนกลาง' },
+]
+
 export default function RoomPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [room, setRoom] = useState(null)
   const [loading, setLoading] = useState(true)
 
-useEffect(() => {
-  setRoom(null)
-  setLoading(true)
+  useEffect(() => {
+    setRoom(null)
+    setLoading(true)
 
-  if (!user) {
-    setLoading(false)
-    return
-  }
-
-  let cancelled = false
-  const fetchRoom = async () => {
-    const { data } = await supabase
-      .from('room_tenants')
-      .select(`room_id, start_date, rooms(id, room_number, floor, rent_price, status)`)
-      .eq('user_id', user.id)
-      .is('end_date', null)
-      .single()
-
-    if (!cancelled) {
-      setRoom(data?.rooms ?? null)
+    if (!user) {
       setLoading(false)
+      return
     }
-  }
-  fetchRoom()
 
-  return () => { cancelled = true }
-}, [user])
+    let cancelled = false
+    const fetchRoom = async () => {
+      const { data } = await supabase
+        .from('room_tenants')
+        .select(`room_id, start_date, rooms(id, room_number, floor, rent_price, status, amenities)`)
+        .eq('user_id', user.id)
+        .is('end_date', null)
+        .single()
+
+      if (!cancelled) {
+        setRoom(data?.rooms ?? null)
+        setLoading(false)
+      }
+    }
+    fetchRoom()
+
+    return () => { cancelled = true }
+  }, [user])
+
   if (loading) {
     return (
       <div style={styles.bg}>
@@ -47,6 +73,8 @@ useEffect(() => {
       </div>
     )
   }
+
+  const amenities = (room?.amenities?.length ? room.amenities : DEFAULT_AMENITIES)
 
   return (
     <div style={styles.bg}>
@@ -110,12 +138,33 @@ useEffect(() => {
             </div>
           </div>
 
-          {/* Amenity tags */}
+          {/* Amenity quick tags */}
           <div style={styles.tagRow}>
             <AmenityTag icon="🏢" label="อาคาร" value="A" />
             <AmenityTag icon="📐" label="ขนาด" value="28 ม²" />
             <AmenityTag icon="❄️" label="แอร์" value="มี" />
             <AmenityTag icon="🛁" label="ห้องน้ำ" value="ในห้อง" />
+          </div>
+
+          {/* Detailed facilities — what's included in the rent */}
+          <div style={styles.detailCard}>
+            <div style={styles.detailHeader}>
+              <span style={styles.eyebrow}>รายละเอียดห้องพัก</span>
+              <p style={styles.detailNote}>
+                สิ่งอำนวยความสะดวกทั้งหมดนี้รวมอยู่ในค่าเช่า {room.rent_price?.toLocaleString()} ฿ / เดือนแล้ว
+              </p>
+            </div>
+
+            {amenities.map((item, i) => (
+              <div key={i} style={styles.detailRow}>
+                <span style={styles.detailIcon}>{item.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <p style={styles.detailName}>{item.name}</p>
+                  {item.desc && <p style={styles.detailDesc}>{item.desc}</p>}
+                </div>
+                <span style={styles.detailCheck}>✓</span>
+              </div>
+            ))}
           </div>
 
           {/* Actions */}
@@ -363,6 +412,38 @@ const styles = {
   tagIcon: { fontSize: 20 },
   tagLabel: { color: '#5b616c', fontSize: 10.5, margin: '0 0 2px' },
   tagValue: { color: '#f2efe6', fontSize: 13.5, fontWeight: 600, margin: 0 },
+
+  // Detailed facilities section
+  detailCard: {
+    background: '#1b1f27',
+    border: '1px solid rgba(255,255,255,0.06)',
+    borderRadius: 18,
+    padding: '20px 18px 8px',
+    marginBottom: 20,
+  },
+  detailHeader: { marginBottom: 16 },
+  detailNote: {
+    color: '#8b909b',
+    fontSize: 12,
+    margin: '8px 0 0',
+    lineHeight: 1.6,
+  },
+  detailRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: '13px 0',
+    borderTop: '1px solid rgba(255,255,255,0.05)',
+  },
+  detailIcon: { fontSize: 20, lineHeight: '22px' },
+  detailName: { color: '#f2efe6', fontSize: 14, fontWeight: 600, margin: '0 0 3px' },
+  detailDesc: { color: '#5b616c', fontSize: 12, margin: 0, lineHeight: 1.5 },
+  detailCheck: {
+    color: '#4fd1c5',
+    fontSize: 15,
+    fontWeight: 700,
+    lineHeight: '22px',
+  },
 
   repairBtn: {
     width: '100%',

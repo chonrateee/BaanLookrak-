@@ -3,6 +3,16 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 
+/*
+  BillsPage
+  ---------
+  Assumes the `bills` table has (in addition to what BillsPage used before):
+    repair_amount  numeric  -- cost of any repairs billed for that period
+
+  If your `bills` table doesn't have this column yet, add it:
+    alter table bills add column if not exists repair_amount numeric not null default 0;
+*/
+
 export default function BillsPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -32,16 +42,31 @@ export default function BillsPage() {
   }, [user])
 
   const calcTotal = (b) =>
-    (b.rent + b.electric_units * b.electric_rate + b.water_amount + b.other_amount)
+    (b.rent || 0) +
+    (b.electric_units || 0) * (b.electric_rate || 0) +
+    (b.water_amount || 0) +
+    (b.repair_amount || 0) +
+    (b.other_amount || 0)
 
   const currentBill = bills[0]
   const pastBills = bills.slice(1)
 
-  if (loading) return <div style={styles.center}>กำลังโหลด...</div>
+  if (loading) {
+    return (
+      <div style={styles.bg}>
+        <FontImport />
+        <div style={styles.center}>
+          <div style={styles.spinner} />
+          <p style={{ color: '#8b909b', fontSize: 13, marginTop: 14 }}>กำลังโหลด...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={styles.bg}>
-      <div style={styles.blob1} />
+      <FontImport />
+      <div style={styles.vignette} />
 
       <div style={styles.header}>
         <button style={styles.back} onClick={() => navigate('/main')}>← กลับ</button>
@@ -49,175 +74,239 @@ export default function BillsPage() {
         <div style={{ width: 40 }} />
       </div>
 
-      <div style={{ padding: '0 24px', position: 'relative', zIndex: 1, paddingBottom: 40 }}>
-        {currentBill ? (
-          <>
-            {/* Current bill card */}
-            <div style={styles.billCard}>
-              <div style={styles.billCardBg} />
-              <div style={styles.billHeader}>
-                <div>
-                  <p style={styles.billMonth}>บิลประจำเดือน {currentBill.month}</p>
-                  <p style={styles.billTotal}>{calcTotal(currentBill).toLocaleString()} ฿</p>
-                </div>
-                <div style={currentBill.status === 'paid' ? styles.paidBadge : styles.pendingBadge}>
-                  {currentBill.status === 'paid' ? '✓ ชำระแล้ว' : '⏳ ค้างชำระ'}
-                </div>
-              </div>
+      <div style={styles.content}>
+        {/* Current bill — keycard styled, always visible with placeholders until filled */}
+        <div style={styles.card}>
+          <div style={styles.cardTopStripe} />
 
-              <div style={styles.billDivider} />
-
-              <div style={styles.billRow}>
-                <span style={styles.billLabel}>🏠 ค่าเช่าห้อง</span>
-                <span style={styles.billValue}>{currentBill.rent?.toLocaleString()} ฿</span>
-              </div>
-              <div style={styles.billRow}>
-                <span style={styles.billLabel}>⚡ ค่าไฟ ({currentBill.electric_units} หน่วย)</span>
-                <span style={styles.billValue}>{(currentBill.electric_units * currentBill.electric_rate).toLocaleString()} ฿</span>
-              </div>
-              <div style={styles.billRow}>
-                <span style={styles.billLabel}>💧 ค่าน้ำ</span>
-                <span style={styles.billValue}>{currentBill.water_amount?.toLocaleString()} ฿</span>
-              </div>
-              {currentBill.other_amount > 0 && (
-                <div style={styles.billRow}>
-                  <span style={styles.billLabel}>📦 อื่นๆ</span>
-                  <span style={styles.billValue}>{currentBill.other_amount?.toLocaleString()} ฿</span>
-                </div>
-              )}
+          <div style={styles.cardTop}>
+            <div style={styles.cardTopRow}>
+              <span style={styles.eyebrow}>บิลประจำเดือน</span>
+              <span style={styles.serial}>{currentBill?.month || 'ยังไม่ระบุ'}</span>
             </div>
-
-            {/* History */}
-            {pastBills.length > 0 && (
-              <>
-                <p style={styles.sectionLabel}>ประวัติบิลย้อนหลัง</p>
-                {pastBills.map(bill => (
-                  <div key={bill.id} style={styles.pastCard}>
-                    <div>
-                      <p style={styles.pastMonth}>{bill.month}</p>
-                      <p style={styles.pastTotal}>{calcTotal(bill).toLocaleString()} ฿</p>
-                    </div>
-                    <div style={bill.status === 'paid' ? styles.paidBadgeSmall : styles.pendingBadgeSmall}>
-                      {bill.status === 'paid' ? '✓ ชำระแล้ว' : 'ค้างชำระ'}
-                    </div>
-                  </div>
-                ))}
-              </>
+            <h1 style={styles.total}>
+              {currentBill ? `${calcTotal(currentBill).toLocaleString()} ฿` : '— ฿'}
+            </h1>
+            {currentBill ? (
+              <div style={currentBill.status === 'paid' ? styles.paidPill : styles.pendingPill}>
+                <span style={{
+                  ...styles.statusDot,
+                  background: currentBill.status === 'paid' ? '#4fd1c5' : '#e8a15a',
+                  boxShadow: currentBill.status === 'paid' ? '0 0 6px #4fd1c5' : '0 0 6px #e8a15a',
+                }} />
+                {currentBill.status === 'paid' ? 'ชำระแล้ว' : 'ค้างชำระ'}
+              </div>
+            ) : (
+              <div style={styles.waitingPill}>
+                <span style={styles.statusDotMuted} />
+                รอผู้ดูแลกรอกยอด
+              </div>
             )}
-          </>
-        ) : (
-          <div style={styles.empty}>
-            <p style={{ fontSize: 48 }}>📭</p>
-            <p style={{ color: '#aaa' }}>ยังไม่มีบิล</p>
           </div>
+
+          {/* Perforation */}
+          <div style={styles.perfRow}>
+            <div style={styles.notchLeft} />
+            <div style={styles.perfLine} />
+            <div style={styles.notchRight} />
+          </div>
+
+          {/* Line items — always shown, dashes until admin fills them in */}
+          <div style={styles.lineItems}>
+            <LineItem icon="🏠" label="ค่าเช่าห้อง" value={currentBill?.rent} empty={!currentBill} />
+            <LineItem
+              icon="⚡"
+              label={currentBill ? `ค่าไฟ (${currentBill.electric_units ?? 0} หน่วย)` : 'ค่าไฟ'}
+              value={currentBill ? (currentBill.electric_units || 0) * (currentBill.electric_rate || 0) : undefined}
+              empty={!currentBill}
+            />
+            <LineItem icon="💧" label="ค่าน้ำ" value={currentBill?.water_amount} empty={!currentBill} />
+            <LineItem icon="🔧" label="ค่าซ่อม" value={currentBill?.repair_amount} empty={!currentBill} />
+            <LineItem icon="📦" label="อื่นๆ" value={currentBill?.other_amount} empty={!currentBill} />
+          </div>
+
+          <div style={styles.barcode}>
+            {barcodeBars.map((w, i) => (
+              <div key={i} style={{ ...styles.barcodeBar, width: w }} />
+            ))}
+          </div>
+        </div>
+
+        {!currentBill && (
+          <p style={styles.waitingNote}>
+            เมื่อผู้ดูแลหอพักกรอกยอดค่าใช้จ่ายประจำเดือนนี้แล้ว ตัวเลขจะขึ้นในช่องด้านบนโดยอัตโนมัติ
+          </p>
+        )}
+
+        {/* History */}
+        {pastBills.length > 0 && (
+          <>
+            <p style={styles.sectionLabel}>ประวัติบิลย้อนหลัง</p>
+            {pastBills.map(bill => (
+              <div key={bill.id} style={styles.pastCard}>
+                <div>
+                  <p style={styles.pastMonth}>{bill.month}</p>
+                  <p style={styles.pastTotal}>{calcTotal(bill).toLocaleString()} ฿</p>
+                </div>
+                <div style={bill.status === 'paid' ? styles.paidPillSmall : styles.pendingPillSmall}>
+                  {bill.status === 'paid' ? '✓ ชำระแล้ว' : 'ค้างชำระ'}
+                </div>
+              </div>
+            ))}
+          </>
         )}
       </div>
     </div>
   )
 }
 
+function LineItem({ icon, label, value, empty }) {
+  return (
+    <div style={styles.lineRow}>
+      <span style={styles.lineLabel}>{icon} {label}</span>
+      <span style={{ ...styles.lineValue, ...(empty ? styles.lineValueEmpty : {}) }}>
+        {empty || value == null ? '—' : `${value.toLocaleString()} ฿`}
+      </span>
+    </div>
+  )
+}
+
+function FontImport() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap');
+      @keyframes cardRise {
+        from { opacity: 0; transform: translateY(14px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) {
+        * { animation: none !important; transition: none !important; }
+      }
+    `}</style>
+  )
+}
+
+const barcodeBars = [3, 6, 2, 8, 4, 2, 6, 3, 5, 2, 7, 4, 3, 6, 2, 8, 3, 5]
+
 const styles = {
   bg: {
     minHeight: '100vh',
-    background: 'linear-gradient(160deg, #0f0c29, #302b63, #24243e)',
-    fontFamily: "'Segoe UI', sans-serif",
+    background: '#12151b',
+    fontFamily: "'Noto Sans Thai', 'Segoe UI', sans-serif",
+    paddingBottom: 48,
     position: 'relative',
     overflow: 'hidden',
   },
-  blob1: {
+  vignette: {
     position: 'absolute',
-    width: 300,
-    height: 300,
-    background: 'radial-gradient(circle, #f59e0b22, transparent)',
-    borderRadius: '50%',
-    top: -100,
-    right: -100,
+    inset: 0,
+    background: 'radial-gradient(700px 400px at 50% -10%, rgba(201,164,99,0.10), transparent)',
     pointerEvents: 'none',
   },
-  center: { color: '#fff', textAlign: 'center', marginTop: 100, fontFamily: 'sans-serif' },
+  center: { display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 140 },
+  spinner: {
+    width: 22, height: 22, borderRadius: '50%',
+    border: '2px solid rgba(201,164,99,0.25)', borderTopColor: '#c9a463',
+    animation: 'spin 0.8s linear infinite',
+  },
+
   header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '20px 24px',
-    marginBottom: 24,
-    position: 'relative',
-    zIndex: 1,
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '22px 24px 8px', marginBottom: 22, position: 'relative', zIndex: 1,
   },
-  back: { background: 'none', border: 'none', color: '#a78bfa', fontSize: 14, cursor: 'pointer' },
-  title: { color: '#fff', fontSize: 18, margin: 0, fontWeight: 'bold' },
-  billCard: {
+  back: { background: 'none', border: 'none', color: '#c9a463', fontSize: 14, cursor: 'pointer', fontFamily: "'Noto Sans Thai', sans-serif" },
+  title: { color: '#f2efe6', fontSize: 17, margin: 0, fontWeight: 600, letterSpacing: 0.2 },
+  content: { padding: '0 20px', position: 'relative', zIndex: 1 },
+
+  card: {
     position: 'relative',
-    background: 'linear-gradient(135deg, #1e1b4b, #312e81)',
-    border: '1px solid rgba(99,102,241,0.3)',
-    borderRadius: 24,
-    padding: '24px 20px',
-    marginBottom: 24,
+    background: 'linear-gradient(165deg, #232833, #171a21)',
+    border: '1px solid rgba(201,164,99,0.22)',
+    borderRadius: 22,
     overflow: 'hidden',
-    boxShadow: '0 12px 40px rgba(79,70,229,0.3)',
+    marginBottom: 20,
+    animation: 'cardRise 0.5s ease-out',
+    boxShadow: '0 20px 50px rgba(0,0,0,0.35)',
   },
-  billCardBg: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    background: 'rgba(124,58,237,0.1)',
-    borderRadius: '50%',
-    top: -60,
-    right: -40,
+  cardTopStripe: {
+    height: 5,
+    background: 'linear-gradient(90deg, #8a7448, #c9a463, #e8cf9c, #c9a463, #8a7448)',
   },
-  billHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
-  billMonth: { color: 'rgba(255,255,255,0.6)', fontSize: 13, margin: '0 0 4px' },
-  billTotal: { color: '#fff', fontSize: 32, fontWeight: 'bold', margin: 0 },
-  paidBadge: {
-    background: '#06644222',
-    border: '1px solid #34d39944',
-    color: '#34d399',
-    padding: '6px 14px',
-    borderRadius: 20,
-    fontSize: 12,
-    whiteSpace: 'nowrap',
+  cardTop: { padding: '22px 24px 26px' },
+  cardTopRow: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18,
   },
-  pendingBadge: {
-    background: '#92400e22',
-    border: '1px solid #fbbf2444',
-    color: '#fbbf24',
-    padding: '6px 14px',
-    borderRadius: 20,
-    fontSize: 12,
-    whiteSpace: 'nowrap',
+  eyebrow: {
+    color: '#c9a463', fontSize: 11, letterSpacing: 1.5, fontWeight: 600, textTransform: 'uppercase',
   },
-  billDivider: { borderTop: '1px solid rgba(255,255,255,0.08)', margin: '16px 0' },
-  billRow: { display: 'flex', justifyContent: 'space-between', marginBottom: 12 },
-  billLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 14 },
-  billValue: { color: '#fff', fontSize: 14, fontWeight: '500' },
-  sectionLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', margin: '0 0 12px' },
+  serial: { color: '#5b616c', fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 0.5 },
+  total: {
+    color: '#f2efe6', fontSize: 46, fontWeight: 700, margin: '0 0 16px',
+    fontFamily: "'Space Grotesk', sans-serif", letterSpacing: -1,
+  },
+  paidPill: {
+    display: 'inline-flex', alignItems: 'center', gap: 7,
+    background: 'rgba(79,209,197,0.12)', border: '1px solid rgba(79,209,197,0.3)',
+    color: '#7fe0d5', padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500,
+  },
+  pendingPill: {
+    display: 'inline-flex', alignItems: 'center', gap: 7,
+    background: 'rgba(232,161,90,0.12)', border: '1px solid rgba(232,161,90,0.3)',
+    color: '#f0bd8a', padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500,
+  },
+  statusDot: { width: 6, height: 6, borderRadius: '50%' },
+  waitingPill: {
+    display: 'inline-flex', alignItems: 'center', gap: 7,
+    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)',
+    color: '#8b909b', padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500,
+  },
+  statusDotMuted: { width: 6, height: 6, borderRadius: '50%', background: '#5b616c' },
+  waitingNote: {
+    color: '#5b616c', fontSize: 12, textAlign: 'center', lineHeight: 1.6, margin: '-8px 4px 20px',
+  },
+
+  perfRow: { position: 'relative', display: 'flex', alignItems: 'center', height: 0 },
+  perfLine: { flex: 1, borderTop: '2px dashed rgba(201,164,99,0.25)' },
+  notchLeft: { position: 'absolute', left: -12, top: -12, width: 24, height: 24, borderRadius: '50%', background: '#12151b' },
+  notchRight: { position: 'absolute', right: -12, top: -12, width: 24, height: 24, borderRadius: '50%', background: '#12151b' },
+
+  lineItems: { padding: '22px 24px 6px' },
+  lineRow: { display: 'flex', justifyContent: 'space-between', marginBottom: 14 },
+  lineLabel: { color: '#8b909b', fontSize: 13.5 },
+  lineValue: { color: '#f2efe6', fontSize: 13.5, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace" },
+  lineValueEmpty: { color: '#5b616c', fontWeight: 400 },
+
+  barcode: {
+    display: 'flex', alignItems: 'flex-end', gap: 3,
+    padding: '10px 24px 18px', height: 20, opacity: 0.5,
+  },
+  barcodeBar: { height: '100%', background: 'rgba(201,164,99,0.5)', borderRadius: 1 },
+
+  sectionLabel: {
+    color: '#5b616c', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', margin: '4px 0 12px',
+  },
   pastCard: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    background: 'rgba(255,255,255,0.04)',
-    border: '1px solid rgba(255,255,255,0.06)',
-    borderRadius: 14,
-    padding: '14px 18px',
-    marginBottom: 10,
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    background: '#1b1f27', border: '1px solid rgba(255,255,255,0.06)',
+    borderRadius: 14, padding: '14px 18px', marginBottom: 10,
   },
-  pastMonth: { color: 'rgba(255,255,255,0.6)', fontSize: 13, margin: '0 0 4px' },
-  pastTotal: { color: '#fff', fontSize: 16, fontWeight: 'bold', margin: 0 },
-  paidBadgeSmall: {
-    background: '#06644222',
-    border: '1px solid #34d39944',
-    color: '#34d399',
-    padding: '4px 12px',
-    borderRadius: 20,
-    fontSize: 11,
+  pastMonth: { color: '#8b909b', fontSize: 12.5, margin: '0 0 4px' },
+  pastTotal: { color: '#f2efe6', fontSize: 16, fontWeight: 700, margin: 0, fontFamily: "'Space Grotesk', sans-serif" },
+  paidPillSmall: {
+    background: 'rgba(79,209,197,0.12)', border: '1px solid rgba(79,209,197,0.3)',
+    color: '#7fe0d5', padding: '4px 12px', borderRadius: 20, fontSize: 11,
   },
-  pendingBadgeSmall: {
-    background: '#92400e22',
-    border: '1px solid #fbbf2444',
-    color: '#fbbf24',
-    padding: '4px 12px',
-    borderRadius: 20,
-    fontSize: 11,
+  pendingPillSmall: {
+    background: 'rgba(232,161,90,0.12)', border: '1px solid rgba(232,161,90,0.3)',
+    color: '#f0bd8a', padding: '4px 12px', borderRadius: 20, fontSize: 11,
   },
-  empty: { textAlign: 'center', marginTop: 80, color: '#fff' },
+
+  emptyCard: {
+    textAlign: 'center', marginTop: 60, padding: '40px 24px',
+    background: '#1b1f27', border: '1px dashed rgba(255,255,255,0.12)', borderRadius: 20,
+  },
+  emptyIcon: { fontSize: 34, color: '#5b616c', margin: '0 0 14px' },
+  emptyTitle: { color: '#f2efe6', fontSize: 15, fontWeight: 600, margin: '0 0 6px' },
+  emptyBody: { color: '#5b616c', fontSize: 13, margin: 0 },
 }

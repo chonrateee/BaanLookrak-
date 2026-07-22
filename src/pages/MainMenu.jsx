@@ -26,7 +26,7 @@ export default function MainMenu() {
         <div style={styles.headerTopStripe} />
         <div style={styles.headerInner}>
           <div style={styles.headerTop}>
-            <span style={styles.brand}>🏠 BaanRokrak</span>
+            <span style={styles.brand}>🏠 BaanRokrakk</span>
             <button style={styles.bellBtn} aria-label="การแจ้งเตือน">🔔</button>
           </div>
           <p style={styles.greeting}>สวัสดี,</p>

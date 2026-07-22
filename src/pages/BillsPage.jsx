@@ -18,7 +18,6 @@ export default function BillsPage() {
         .eq('user_id', user.id)
         .is('end_date', null)
         .single()
-
       if (tenant) {
         const { data } = await supabase
           .from('bills')
@@ -32,138 +31,193 @@ export default function BillsPage() {
     fetchBills()
   }, [user])
 
+  const calcTotal = (b) =>
+    (b.rent + b.electric_units * b.electric_rate + b.water_amount + b.other_amount)
+
   const currentBill = bills[0]
   const pastBills = bills.slice(1)
 
   if (loading) return <div style={styles.center}>กำลังโหลด...</div>
 
   return (
-    <div style={styles.container}>
+    <div style={styles.bg}>
+      <div style={styles.blob1} />
+
       <div style={styles.header}>
         <button style={styles.back} onClick={() => navigate('/main')}>← กลับ</button>
         <h2 style={styles.title}>ค่าใช้จ่าย</h2>
+        <div style={{ width: 40 }} />
       </div>
 
-      {currentBill ? (
-        <div style={styles.card}>
-          <div style={styles.cardHeader}>
-            <span style={styles.month}>บิล {currentBill.month}</span>
-            <span style={currentBill.status === 'paid' ? styles.badgePaid : styles.badgePending}>
-              {currentBill.status === 'paid' ? 'ชำระแล้ว' : 'ค้างชำระ'}
-            </span>
-          </div>
-
-          <div style={styles.divider} />
-
-          <div style={styles.row}>
-            <span style={styles.rowLabel}>ค่าเช่าห้อง</span>
-            <span style={styles.rowValue}>{currentBill.rent?.toLocaleString()} ฿</span>
-          </div>
-          <div style={styles.row}>
-            <span style={styles.rowLabel}>ค่าไฟ ({currentBill.electric_units} หน่วย)</span>
-            <span style={styles.rowValue}>
-              {(currentBill.electric_units * currentBill.electric_rate).toLocaleString()} ฿
-            </span>
-          </div>
-          <div style={styles.row}>
-            <span style={styles.rowLabel}>ค่าน้ำ</span>
-            <span style={styles.rowValue}>{currentBill.water_amount?.toLocaleString()} ฿</span>
-          </div>
-          {currentBill.other_amount > 0 && (
-            <div style={styles.row}>
-              <span style={styles.rowLabel}>อื่นๆ</span>
-              <span style={styles.rowValue}>{currentBill.other_amount?.toLocaleString()} ฿</span>
-            </div>
-          )}
-
-          <div style={styles.divider} />
-
-          <div style={styles.row}>
-            <span style={{ color: '#fff', fontWeight: 'bold' }}>รวมทั้งหมด</span>
-            <span style={styles.total}>
-              {(currentBill.rent + (currentBill.electric_units * currentBill.electric_rate) + currentBill.water_amount + currentBill.other_amount).toLocaleString()} ฿
-            </span>
-          </div>
-        </div>
-      ) : (
-        <div style={styles.empty}>
-          <p style={{ color: '#aaa' }}>ยังไม่มีบิล</p>
-        </div>
-      )}
-
-      {pastBills.length > 0 && (
-        <div style={{ margin: '24px 24px 0' }}>
-          <p style={styles.sectionTitle}>ประวัติบิลย้อนหลัง</p>
-          {pastBills.map(bill => (
-            <div key={bill.id} style={styles.pastBill}>
-              <span style={styles.rowLabel}>{bill.month}</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={styles.rowValue}>
-                  {(bill.rent + (bill.electric_units * bill.electric_rate) + bill.water_amount + bill.other_amount).toLocaleString()} ฿
-                </span>
-                <span style={bill.status === 'paid' ? styles.badgePaid : styles.badgePending}>
-                  {bill.status === 'paid' ? '✓' : 'ค้าง'}
-                </span>
+      <div style={{ padding: '0 24px', position: 'relative', zIndex: 1, paddingBottom: 40 }}>
+        {currentBill ? (
+          <>
+            {/* Current bill card */}
+            <div style={styles.billCard}>
+              <div style={styles.billCardBg} />
+              <div style={styles.billHeader}>
+                <div>
+                  <p style={styles.billMonth}>บิลประจำเดือน {currentBill.month}</p>
+                  <p style={styles.billTotal}>{calcTotal(currentBill).toLocaleString()} ฿</p>
+                </div>
+                <div style={currentBill.status === 'paid' ? styles.paidBadge : styles.pendingBadge}>
+                  {currentBill.status === 'paid' ? '✓ ชำระแล้ว' : '⏳ ค้างชำระ'}
+                </div>
               </div>
+
+              <div style={styles.billDivider} />
+
+              <div style={styles.billRow}>
+                <span style={styles.billLabel}>🏠 ค่าเช่าห้อง</span>
+                <span style={styles.billValue}>{currentBill.rent?.toLocaleString()} ฿</span>
+              </div>
+              <div style={styles.billRow}>
+                <span style={styles.billLabel}>⚡ ค่าไฟ ({currentBill.electric_units} หน่วย)</span>
+                <span style={styles.billValue}>{(currentBill.electric_units * currentBill.electric_rate).toLocaleString()} ฿</span>
+              </div>
+              <div style={styles.billRow}>
+                <span style={styles.billLabel}>💧 ค่าน้ำ</span>
+                <span style={styles.billValue}>{currentBill.water_amount?.toLocaleString()} ฿</span>
+              </div>
+              {currentBill.other_amount > 0 && (
+                <div style={styles.billRow}>
+                  <span style={styles.billLabel}>📦 อื่นๆ</span>
+                  <span style={styles.billValue}>{currentBill.other_amount?.toLocaleString()} ฿</span>
+                </div>
+              )}
             </div>
-          ))}
-        </div>
-      )}
+
+            {/* History */}
+            {pastBills.length > 0 && (
+              <>
+                <p style={styles.sectionLabel}>ประวัติบิลย้อนหลัง</p>
+                {pastBills.map(bill => (
+                  <div key={bill.id} style={styles.pastCard}>
+                    <div>
+                      <p style={styles.pastMonth}>{bill.month}</p>
+                      <p style={styles.pastTotal}>{calcTotal(bill).toLocaleString()} ฿</p>
+                    </div>
+                    <div style={bill.status === 'paid' ? styles.paidBadgeSmall : styles.pendingBadgeSmall}>
+                      {bill.status === 'paid' ? '✓ ชำระแล้ว' : 'ค้างชำระ'}
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </>
+        ) : (
+          <div style={styles.empty}>
+            <p style={{ fontSize: 48 }}>📭</p>
+            <p style={{ color: '#aaa' }}>ยังไม่มีบิล</p>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
 const styles = {
-  container: { minHeight: '100vh', background: '#1a1a2e', fontFamily: 'sans-serif', paddingBottom: 40 },
-  center: { color: '#fff', textAlign: 'center', marginTop: 100 },
+  bg: {
+    minHeight: '100vh',
+    background: 'linear-gradient(160deg, #0f0c29, #302b63, #24243e)',
+    fontFamily: "'Segoe UI', sans-serif",
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  blob1: {
+    position: 'absolute',
+    width: 300,
+    height: 300,
+    background: 'radial-gradient(circle, #f59e0b22, transparent)',
+    borderRadius: '50%',
+    top: -100,
+    right: -100,
+    pointerEvents: 'none',
+  },
+  center: { color: '#fff', textAlign: 'center', marginTop: 100, fontFamily: 'sans-serif' },
   header: {
-    background: '#16213e',
-    padding: '16px 24px',
     display: 'flex',
     alignItems: 'center',
-    gap: 16,
+    justifyContent: 'space-between',
+    padding: '20px 24px',
     marginBottom: 24,
+    position: 'relative',
+    zIndex: 1,
   },
-  back: { background: 'none', border: 'none', color: '#aaa', fontSize: 14, cursor: 'pointer' },
-  title: { color: '#fff', fontSize: 18, margin: 0 },
-  card: {
-    margin: '0 24px',
-    background: '#16213e',
-    borderRadius: 16,
+  back: { background: 'none', border: 'none', color: '#a78bfa', fontSize: 14, cursor: 'pointer' },
+  title: { color: '#fff', fontSize: 18, margin: 0, fontWeight: 'bold' },
+  billCard: {
+    position: 'relative',
+    background: 'linear-gradient(135deg, #1e1b4b, #312e81)',
+    border: '1px solid rgba(99,102,241,0.3)',
+    borderRadius: 24,
     padding: '24px 20px',
-    border: '1px solid #2a2a4a',
+    marginBottom: 24,
+    overflow: 'hidden',
+    boxShadow: '0 12px 40px rgba(79,70,229,0.3)',
   },
-  cardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  month: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  badgePaid: {
-    background: '#06644233',
+  billCardBg: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    background: 'rgba(124,58,237,0.1)',
+    borderRadius: '50%',
+    top: -60,
+    right: -40,
+  },
+  billHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
+  billMonth: { color: 'rgba(255,255,255,0.6)', fontSize: 13, margin: '0 0 4px' },
+  billTotal: { color: '#fff', fontSize: 32, fontWeight: 'bold', margin: 0 },
+  paidBadge: {
+    background: '#06644222',
+    border: '1px solid #34d39944',
     color: '#34d399',
-    padding: '4px 12px',
+    padding: '6px 14px',
     borderRadius: 20,
     fontSize: 12,
+    whiteSpace: 'nowrap',
   },
-  badgePending: {
-    background: '#92400e33',
+  pendingBadge: {
+    background: '#92400e22',
+    border: '1px solid #fbbf2444',
     color: '#fbbf24',
-    padding: '4px 12px',
+    padding: '6px 14px',
     borderRadius: 20,
     fontSize: 12,
+    whiteSpace: 'nowrap',
   },
-  divider: { borderTop: '1px solid #2a2a4a', margin: '16px 0' },
-  row: { display: 'flex', justifyContent: 'space-between', marginBottom: 12 },
-  rowLabel: { color: '#aaa', fontSize: 14 },
-  rowValue: { color: '#fff', fontSize: 14 },
-  total: { color: '#a78bfa', fontSize: 20, fontWeight: 'bold' },
-  empty: { textAlign: 'center', marginTop: 80 },
-  sectionTitle: { color: '#aaa', fontSize: 13, marginBottom: 12 },
-  pastBill: {
+  billDivider: { borderTop: '1px solid rgba(255,255,255,0.08)', margin: '16px 0' },
+  billRow: { display: 'flex', justifyContent: 'space-between', marginBottom: 12 },
+  billLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 14 },
+  billValue: { color: '#fff', fontSize: 14, fontWeight: '500' },
+  sectionLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', margin: '0 0 12px' },
+  pastCard: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    background: '#16213e',
-    borderRadius: 8,
-    padding: '12px 16px',
-    marginBottom: 8,
-    border: '1px solid #2a2a4a',
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid rgba(255,255,255,0.06)',
+    borderRadius: 14,
+    padding: '14px 18px',
+    marginBottom: 10,
   },
+  pastMonth: { color: 'rgba(255,255,255,0.6)', fontSize: 13, margin: '0 0 4px' },
+  pastTotal: { color: '#fff', fontSize: 16, fontWeight: 'bold', margin: 0 },
+  paidBadgeSmall: {
+    background: '#06644222',
+    border: '1px solid #34d39944',
+    color: '#34d399',
+    padding: '4px 12px',
+    borderRadius: 20,
+    fontSize: 11,
+  },
+  pendingBadgeSmall: {
+    background: '#92400e22',
+    border: '1px solid #fbbf2444',
+    color: '#fbbf24',
+    padding: '4px 12px',
+    borderRadius: 20,
+    fontSize: 11,
+  },
+  empty: { textAlign: 'center', marginTop: 80, color: '#fff' },
 }

@@ -1,67 +1,84 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 
 /*
-  BillsPage
+  AdminPage
   ---------
-  Assumes the `bills` table has (in addition to what BillsPage used before):
-    repair_amount  numeric  -- cost of any repairs billed for that period
+  Three tabs:
+    1. ภาพรวมห้องพัก   – grid of every room, color-coded ว่าง / ไม่ว่าง, tap to assign/ย้ายออก
+    2. เพิ่มผู้พักอาศัย   – admin fills in a new tenant's info + room, tenant logs in later
+    3. แจ้งซ่อม          – list of repair tickets, admin updates status
 
-  If your `bills` table doesn't have this column yet, add it:
-    alter table bills add column if not exists repair_amount numeric not null default 0;
+  DATA MODEL ASSUMED (adjust to match your actual Supabase schema):
+    rooms            (id, room_number, floor, rent_price, status)
+    room_tenants     (id, room_id, user_id, tenant_name, tenant_phone, start_date, end_date)
+    repairs          (id, room_id, description, status, created_at, rooms(room_number))
+
+  IMPORTANT — about "กรอกให้เขาแล้วให้เขาไปล็อคอิน":
+    The Supabase anon key cannot create auth.users for someone else — that requires
+    the service_role key, which must never live in frontend code. The flow below
+    pre-registers the tenant as a row in room_tenants with user_id = null and a
+    phone number. When the tenant signs up for real on RegisterPage, have that page
+    look up an existing room_tenants row by phone number and attach auth user_id to
+    it (an UPDATE, not an INSERT) instead of creating a fresh unlinked tenant. If you
+    want the account created up-front instead, you'll need a small Supabase Edge
+    Function that uses supabase.auth.admin.createUser() with the service role key.
 */
 
-export default function BillsPage() {
+const TABS = [
+  { id: 'rooms', label: 'ภาพรวมห้องพัก', icon: '🗝️' },
+  { id: 'add', label: 'เพิ่มผู้พักอาศัย', icon: '➕' },
+  { id: 'bills', label: 'ออกบิล', icon: '🧾' },
+  { id: 'repairs', label: 'แจ้งซ่อม', icon: '🔧' },
+]
+
+export default function AdminPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const [bills, setBills] = useState([])
+  const [tab, setTab] = useState('rooms')
+
+  const [rooms, setRooms] = useState([])
+  const [tenants, setTenants] = useState([])
+  const [repairs, setRepairs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [toast, setToast] = useState(null)
 
   useEffect(() => {
-    if (!user) return
-    const fetchBills = async () => {
-      const { data: tenant } = await supabase
-        .from('room_tenants')
-        .select('room_id')
-        .eq('user_id', user.id)
-        .is('end_date', null)
-        .single()
-      if (tenant) {
-        const { data } = await supabase
-          .from('bills')
-          .select('*')
-          .eq('room_id', tenant.room_id)
-          .order('created_at', { ascending: false })
-        setBills(data || [])
-      }
-      setLoading(false)
-    }
-    fetchBills()
-  }, [user])
+    fetchAll()
+  }, [])
 
-  const calcTotal = (b) =>
-    (b.rent || 0) +
-    (b.electric_units || 0) * (b.electric_rate || 0) +
-    (b.water_amount || 0) +
-    (b.repair_amount || 0) +
-    (b.other_amount || 0)
-
-  const currentBill = bills[0]
-  const pastBills = bills.slice(1)
-
-  if (loading) {
-    return (
-      <div style={styles.bg}>
-        <FontImport />
-        <div style={styles.center}>
-          <div style={styles.spinner} />
-          <p style={{ color: '#8b909b', fontSize: 13, marginTop: 14 }}>กำลังโหลด...</p>
-        </div>
-      </div>
-    )
+  const fetchAll = async () => {
+    setLoading(true)
+    const [{ data: roomsData }, { data: tenantsData }, { data: repairsData }] = await Promise.all([
+      supabase.from('rooms').select('*').order('room_number'),
+      supabase.from('room_tenants').select('*').is('end_date', null),
+      supabase
+        .from('repairs')
+        .select('*, rooms(room_number)')
+        .order('created_at', { ascending: false }),
+    ])
+    setRooms(roomsData ?? [])
+    setTenants(tenantsData ?? [])
+    setRepairs(repairsData ?? [])
+    setLoading(false)
   }
+
+  const showToast = (msg, kind = 'ok') => {
+    setToast({ msg, kind })
+    setTimeout(() => setToast(null), 2600)
+  }
+
+  // room_id -> tenant row
+  const tenantByRoom = useMemo(() => {
+    const map = {}
+    for (const t of tenants) map[t.room_id] = t
+    return map
+  }, [tenants])
+
+  const occupiedCount = tenants.length
+  const vacantCount = Math.max(rooms.length - occupiedCount, 0)
 
   return (
     <div style={styles.bg}>
@@ -70,103 +87,531 @@ export default function BillsPage() {
 
       <div style={styles.header}>
         <button style={styles.back} onClick={() => navigate('/main')}>← กลับ</button>
-        <h2 style={styles.title}>ค่าใช้จ่าย</h2>
+        <h2 style={styles.title}>แผงควบคุมผู้ดูแล</h2>
         <div style={{ width: 40 }} />
       </div>
 
+      {/* Stat strip */}
+      <div style={styles.statRow}>
+        <StatChip label="ห้องทั้งหมด" value={rooms.length} />
+        <StatChip label="ไม่ว่าง" value={occupiedCount} accent="#e8a15a" />
+        <StatChip label="ว่าง" value={vacantCount} accent="#4fd1c5" />
+        <StatChip label="แจ้งซ่อมค้าง" value={repairs.filter(r => r.status !== 'done').length} accent="#e07a7a" />
+      </div>
+
+      {/* Tabs */}
+      <div style={styles.tabRow}>
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            style={{ ...styles.tabBtn, ...(tab === t.id ? styles.tabBtnActive : {}) }}
+            onClick={() => setTab(t.id)}
+          >
+            <span style={{ marginRight: 6 }}>{t.icon}</span>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       <div style={styles.content}>
-        {/* Current bill — keycard styled, always visible with placeholders until filled */}
-        <div style={styles.card}>
-          <div style={styles.cardTopStripe} />
-
-          <div style={styles.cardTop}>
-            <div style={styles.cardTopRow}>
-              <span style={styles.eyebrow}>บิลประจำเดือน</span>
-              <span style={styles.serial}>{currentBill?.month || 'ยังไม่ระบุ'}</span>
-            </div>
-            <h1 style={styles.total}>
-              {currentBill ? `${calcTotal(currentBill).toLocaleString()} ฿` : '— ฿'}
-            </h1>
-            {currentBill ? (
-              <div style={currentBill.status === 'paid' ? styles.paidPill : styles.pendingPill}>
-                <span style={{
-                  ...styles.statusDot,
-                  background: currentBill.status === 'paid' ? '#4fd1c5' : '#e8a15a',
-                  boxShadow: currentBill.status === 'paid' ? '0 0 6px #4fd1c5' : '0 0 6px #e8a15a',
-                }} />
-                {currentBill.status === 'paid' ? 'ชำระแล้ว' : 'ค้างชำระ'}
-              </div>
-            ) : (
-              <div style={styles.waitingPill}>
-                <span style={styles.statusDotMuted} />
-                รอผู้ดูแลกรอกยอด
-              </div>
+        {loading ? (
+          <div style={styles.center}>
+            <div style={styles.spinner} />
+            <p style={{ color: '#8b909b', fontSize: 13, marginTop: 14 }}>กำลังโหลด...</p>
+          </div>
+        ) : (
+          <>
+            {tab === 'rooms' && (
+              <RoomsTab
+                rooms={rooms}
+                tenantByRoom={tenantByRoom}
+                onMoveOut={async (tenantId) => {
+                  const { error } = await supabase
+                    .from('room_tenants')
+                    .update({ end_date: new Date().toISOString() })
+                    .eq('id', tenantId)
+                  if (error) return showToast('ย้ายออกไม่สำเร็จ: ' + error.message, 'err')
+                  showToast('ย้ายผู้พักอาศัยออกแล้ว')
+                  fetchAll()
+                }}
+              />
             )}
-          </div>
 
-          {/* Perforation */}
-          <div style={styles.perfRow}>
-            <div style={styles.notchLeft} />
-            <div style={styles.perfLine} />
-            <div style={styles.notchRight} />
-          </div>
+            {tab === 'add' && (
+              <AddTenantTab
+                rooms={rooms}
+                tenantByRoom={tenantByRoom}
+                onSaved={() => { showToast('เพิ่มผู้พักอาศัยเรียบร้อย'); fetchAll() }}
+                onError={(msg) => showToast(msg, 'err')}
+              />
+            )}
 
-          {/* Line items — always shown, dashes until admin fills them in */}
-          <div style={styles.lineItems}>
-            <LineItem icon="🏠" label="ค่าเช่าห้อง" value={currentBill?.rent} empty={!currentBill} />
-            <LineItem
-              icon="⚡"
-              label={currentBill ? `ค่าไฟ (${currentBill.electric_units ?? 0} หน่วย)` : 'ค่าไฟ'}
-              value={currentBill ? (currentBill.electric_units || 0) * (currentBill.electric_rate || 0) : undefined}
-              empty={!currentBill}
-            />
-            <LineItem icon="💧" label="ค่าน้ำ" value={currentBill?.water_amount} empty={!currentBill} />
-            <LineItem icon="🔧" label="ค่าซ่อม" value={currentBill?.repair_amount} empty={!currentBill} />
-            <LineItem icon="📦" label="อื่นๆ" value={currentBill?.other_amount} empty={!currentBill} />
-          </div>
+            {tab === 'bills' && (
+              <AddBillTab
+                rooms={rooms}
+                tenantByRoom={tenantByRoom}
+                onSaved={() => { showToast('บันทึกบิลเรียบร้อย'); fetchAll() }}
+                onError={(msg) => showToast(msg, 'err')}
+              />
+            )}
 
-          <div style={styles.barcode}>
-            {barcodeBars.map((w, i) => (
-              <div key={i} style={{ ...styles.barcodeBar, width: w }} />
-            ))}
-          </div>
+            {tab === 'repairs' && (
+              <RepairsTab
+                repairs={repairs}
+                onStatusChange={async (id, status) => {
+                  const { error } = await supabase.from('repairs').update({ status }).eq('id', id)
+                  if (error) return showToast('อัปเดตไม่สำเร็จ: ' + error.message, 'err')
+                  showToast('อัปเดตสถานะแล้ว')
+                  fetchAll()
+                }}
+              />
+            )}
+          </>
+        )}
+      </div>
+
+      {toast && (
+        <div style={{ ...styles.toast, ...(toast.kind === 'err' ? styles.toastErr : {}) }}>
+          {toast.msg}
         </div>
+      )}
+    </div>
+  )
+}
 
-        {!currentBill && (
-          <p style={styles.waitingNote}>
-            เมื่อผู้ดูแลหอพักกรอกยอดค่าใช้จ่ายประจำเดือนนี้แล้ว ตัวเลขจะขึ้นในช่องด้านบนโดยอัตโนมัติ
+/* ---------------------------------- Rooms Tab ---------------------------------- */
+
+function RoomsTab({ rooms, tenantByRoom, onMoveOut }) {
+  const [selected, setSelected] = useState(null) // room object
+  const [floor, setFloor] = useState('all')
+  const [status, setStatus] = useState('all')
+
+  const floors = useMemo(
+    () => [...new Set(rooms.map(r => r.floor))].sort((a, b) => a - b),
+    [rooms]
+  )
+
+  const filteredRooms = useMemo(() => {
+    return rooms.filter(room => {
+      if (floor !== 'all' && room.floor !== floor) return false
+      const occupied = !!tenantByRoom[room.id]
+      if (status === 'occupied' && !occupied) return false
+      if (status === 'vacant' && occupied) return false
+      return true
+    })
+  }, [rooms, tenantByRoom, floor, status])
+
+  return (
+    <>
+      <div style={styles.filterRow}>
+        <FilterPill active={floor === 'all'} onClick={() => setFloor('all')}>ทุกชั้น</FilterPill>
+        {floors.map(f => (
+          <FilterPill key={f} active={floor === f} onClick={() => setFloor(f)}>ชั้น {f}</FilterPill>
+        ))}
+      </div>
+      <div style={styles.filterRow}>
+        <FilterPill active={status === 'all'} onClick={() => setStatus('all')}>ทั้งหมด</FilterPill>
+        <FilterPill active={status === 'vacant'} onClick={() => setStatus('vacant')} dot="#4fd1c5">ว่าง</FilterPill>
+        <FilterPill active={status === 'occupied'} onClick={() => setStatus('occupied')} dot="#e8a15a">ไม่ว่าง</FilterPill>
+      </div>
+
+      <div style={styles.roomGrid}>
+        {filteredRooms.map(room => {
+          const tenant = tenantByRoom[room.id]
+          const occupied = !!tenant
+          return (
+            <button
+              key={room.id}
+              style={{
+                ...styles.roomTile,
+                ...(occupied ? styles.roomTileOccupied : styles.roomTileVacant),
+              }}
+              onClick={() => setSelected({ room, tenant })}
+            >
+              <span style={styles.roomTileNum}>{room.room_number}</span>
+              <span style={{
+                ...styles.roomTileDot,
+                background: occupied ? '#e8a15a' : '#4fd1c5',
+                boxShadow: occupied ? '0 0 6px #e8a15a' : '0 0 6px #4fd1c5',
+              }} />
+              <span style={styles.roomTileStatus}>{occupied ? 'ไม่ว่าง' : 'ว่าง'}</span>
+            </button>
+          )
+        })}
+        {rooms.length === 0 && (
+          <p style={{ color: '#5b616c', fontSize: 13, gridColumn: '1 / -1' }}>ยังไม่มีข้อมูลห้องพัก</p>
+        )}
+        {rooms.length > 0 && filteredRooms.length === 0 && (
+          <p style={{ color: '#5b616c', fontSize: 13, gridColumn: '1 / -1' }}>ไม่พบห้องตามเงื่อนไขที่เลือก</p>
+        )}
+      </div>
+
+      {selected && (
+        <RoomDetailSheet
+          data={selected}
+          onClose={() => setSelected(null)}
+          onMoveOut={async (tenantId) => { await onMoveOut(tenantId); setSelected(null) }}
+        />
+      )}
+    </>
+  )
+}
+
+function RoomDetailSheet({ data, onClose, onMoveOut }) {
+  const { room, tenant } = data
+  return (
+    <div style={styles.sheetBackdrop} onClick={onClose}>
+      <div style={styles.sheet} onClick={e => e.stopPropagation()}>
+        <div style={styles.sheetHandle} />
+        <div style={styles.sheetTopRow}>
+          <span style={styles.eyebrow}>ห้อง</span>
+          <span style={styles.serial}>ชั้น {room.floor}</span>
+        </div>
+        <h1 style={styles.sheetRoomNum}>{room.room_number}</h1>
+
+        {tenant ? (
+          <>
+            <div style={styles.sheetInfoRow}>
+              <span style={styles.sheetInfoLabel}>ผู้พักอาศัย</span>
+              <span style={styles.sheetInfoValue}>{tenant.tenant_name}</span>
+            </div>
+            <div style={styles.sheetInfoRow}>
+              <span style={styles.sheetInfoLabel}>เบอร์โทร</span>
+              <span style={styles.sheetInfoValue}>{tenant.tenant_phone || '—'}</span>
+            </div>
+            <div style={styles.sheetInfoRow}>
+              <span style={styles.sheetInfoLabel}>เข้าพักเมื่อ</span>
+              <span style={styles.sheetInfoValue}>
+                {tenant.start_date ? new Date(tenant.start_date).toLocaleDateString('th-TH') : '—'}
+              </span>
+            </div>
+            <div style={styles.sheetInfoRow}>
+              <span style={styles.sheetInfoLabel}>สถานะบัญชี</span>
+              <span style={styles.sheetInfoValue}>{tenant.user_id ? 'ล็อคอินแล้ว' : 'รอเข้าสู่ระบบครั้งแรก'}</span>
+            </div>
+
+            <button style={styles.dangerBtn} onClick={() => onMoveOut(tenant.id)}>
+              ย้ายออกจากห้องนี้
+            </button>
+          </>
+        ) : (
+          <p style={{ color: '#8b909b', fontSize: 13.5, margin: '18px 0 4px' }}>
+            ห้องนี้ว่าง — ไปที่แท็บ "เพิ่มผู้พักอาศัย" เพื่อกำหนดผู้เข้าพัก
           </p>
         )}
 
-        {/* History */}
-        {pastBills.length > 0 && (
-          <>
-            <p style={styles.sectionLabel}>ประวัติบิลย้อนหลัง</p>
-            {pastBills.map(bill => (
-              <div key={bill.id} style={styles.pastCard}>
-                <div>
-                  <p style={styles.pastMonth}>{bill.month}</p>
-                  <p style={styles.pastTotal}>{calcTotal(bill).toLocaleString()} ฿</p>
-                </div>
-                <div style={bill.status === 'paid' ? styles.paidPillSmall : styles.pendingPillSmall}>
-                  {bill.status === 'paid' ? '✓ ชำระแล้ว' : 'ค้างชำระ'}
-                </div>
-              </div>
-            ))}
-          </>
-        )}
+        <button style={styles.sheetCloseBtn} onClick={onClose}>ปิด</button>
       </div>
     </div>
   )
 }
 
-function LineItem({ icon, label, value, empty }) {
+/* -------------------------------- Add Tenant Tab -------------------------------- */
+
+function AddTenantTab({ rooms, tenantByRoom, onSaved, onError }) {
+  const vacantRooms = rooms.filter(r => !tenantByRoom[r.id])
+  const [form, setForm] = useState({ name: '', phone: '', roomId: '', startDate: '' })
+  const [saving, setSaving] = useState(false)
+
+  const update = (key, value) => setForm(f => ({ ...f, [key]: value }))
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!form.name.trim() || !form.phone.trim() || !form.roomId) {
+      return onError('กรุณากรอกชื่อ เบอร์โทร และเลือกห้อง')
+    }
+    setSaving(true)
+    const { error } = await supabase.from('room_tenants').insert({
+      room_id: form.roomId,
+      tenant_name: form.name.trim(),
+      tenant_phone: form.phone.trim(),
+      start_date: form.startDate || new Date().toISOString().slice(0, 10),
+      user_id: null, // linked later when tenant creates their account via RegisterPage
+    })
+    setSaving(false)
+    if (error) return onError('บันทึกไม่สำเร็จ: ' + error.message)
+    setForm({ name: '', phone: '', roomId: '', startDate: '' })
+    onSaved()
+  }
+
   return (
-    <div style={styles.lineRow}>
-      <span style={styles.lineLabel}>{icon} {label}</span>
-      <span style={{ ...styles.lineValue, ...(empty ? styles.lineValueEmpty : {}) }}>
-        {empty || value == null ? '—' : `${value.toLocaleString()} ฿`}
-      </span>
+    <form style={styles.card} onSubmit={handleSubmit}>
+      <div style={styles.cardTopStripe} />
+      <div style={{ padding: '22px 22px 24px' }}>
+        <span style={styles.eyebrow}>ผู้พักอาศัยใหม่</span>
+        <p style={{ color: '#8b909b', fontSize: 12.5, margin: '8px 0 20px', lineHeight: 1.6 }}>
+          กรอกข้อมูลแทนผู้เข้าพัก ระบบจะผูกบัญชีให้อัตโนมัติเมื่อเขาสมัคร/ล็อคอินครั้งแรกด้วยเบอร์โทรนี้
+        </p>
+
+        <Field label="ชื่อ-นามสกุล">
+          <input
+            style={styles.input}
+            value={form.name}
+            onChange={e => update('name', e.target.value)}
+            placeholder="เช่น สมชาย ใจดี"
+          />
+        </Field>
+
+        <Field label="เบอร์โทรศัพท์">
+          <input
+            style={styles.input}
+            value={form.phone}
+            onChange={e => update('phone', e.target.value)}
+            placeholder="08x-xxx-xxxx"
+            inputMode="tel"
+          />
+        </Field>
+
+        <Field label="เลือกห้องพัก">
+          <select
+            style={styles.input}
+            value={form.roomId}
+            onChange={e => update('roomId', e.target.value)}
+          >
+            <option value="">— เลือกห้องว่าง —</option>
+            {vacantRooms.map(r => (
+              <option key={r.id} value={r.id}>
+                ห้อง {r.room_number} · ชั้น {r.floor} · {r.rent_price?.toLocaleString()} ฿/เดือน
+              </option>
+            ))}
+          </select>
+          {vacantRooms.length === 0 && (
+            <p style={{ color: '#e07a7a', fontSize: 11.5, marginTop: 6 }}>ไม่มีห้องว่างในขณะนี้</p>
+          )}
+        </Field>
+
+        <Field label="วันที่เข้าพัก (ไม่กรอก = วันนี้)">
+          <input
+            type="date"
+            style={styles.input}
+            value={form.startDate}
+            onChange={e => update('startDate', e.target.value)}
+          />
+        </Field>
+
+        <button style={styles.submitBtn} type="submit" disabled={saving}>
+          {saving ? 'กำลังบันทึก...' : 'บันทึกผู้พักอาศัย'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+/* ---------------------------------- Add Bill Tab ---------------------------------- */
+
+const EMPTY_BILL_FORM = {
+  roomId: '',
+  month: '',
+  rent: '',
+  electricUnits: '',
+  electricRate: '',
+  water: '',
+  repair: '',
+  other: '',
+  status: 'pending',
+}
+
+function AddBillTab({ rooms, tenantByRoom, onSaved, onError }) {
+  const occupiedRooms = rooms.filter(r => tenantByRoom[r.id])
+  const [form, setForm] = useState(EMPTY_BILL_FORM)
+  const [saving, setSaving] = useState(false)
+
+  const update = (key, value) => setForm(f => ({ ...f, [key]: value }))
+
+  const total =
+    (Number(form.rent) || 0) +
+    (Number(form.electricUnits) || 0) * (Number(form.electricRate) || 0) +
+    (Number(form.water) || 0) +
+    (Number(form.repair) || 0) +
+    (Number(form.other) || 0)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!form.roomId || !form.month.trim() || !form.rent) {
+      return onError('กรุณาเลือกห้อง ระบุเดือน และค่าเช่าอย่างน้อย')
+    }
+    setSaving(true)
+    const { error } = await supabase.from('bills').insert({
+      room_id: form.roomId,
+      month: form.month.trim(),
+      rent: Number(form.rent) || 0,
+      electric_units: Number(form.electricUnits) || 0,
+      electric_rate: Number(form.electricRate) || 0,
+      water_amount: Number(form.water) || 0,
+      repair_amount: Number(form.repair) || 0,
+      other_amount: Number(form.other) || 0,
+      status: form.status,
+    })
+    setSaving(false)
+    if (error) return onError('บันทึกบิลไม่สำเร็จ: ' + error.message)
+    setForm(EMPTY_BILL_FORM)
+    onSaved()
+  }
+
+  return (
+    <form style={styles.card} onSubmit={handleSubmit}>
+      <div style={styles.cardTopStripe} />
+      <div style={{ padding: '22px 22px 24px' }}>
+        <span style={styles.eyebrow}>ออกบิลใหม่</span>
+        <p style={{ color: '#8b909b', fontSize: 12.5, margin: '8px 0 20px', lineHeight: 1.6 }}>
+          กรอกยอดแต่ละรายการของห้องที่มีผู้พักอาศัยอยู่ ผู้พักจะเห็นบิลนี้ทันทีที่หน้าค่าใช้จ่ายของเขา
+        </p>
+
+        <Field label="เลือกห้อง">
+          <select style={styles.input} value={form.roomId} onChange={e => update('roomId', e.target.value)}>
+            <option value="">— เลือกห้องที่มีผู้พัก —</option>
+            {occupiedRooms.map(r => (
+              <option key={r.id} value={r.id}>
+                ห้อง {r.room_number} · {tenantByRoom[r.id]?.tenant_name}
+              </option>
+            ))}
+          </select>
+          {occupiedRooms.length === 0 && (
+            <p style={{ color: '#e07a7a', fontSize: 11.5, marginTop: 6 }}>ยังไม่มีห้องที่มีผู้พักอาศัย</p>
+          )}
+        </Field>
+
+        <Field label="เดือน">
+          <input
+            style={styles.input}
+            value={form.month}
+            onChange={e => update('month', e.target.value)}
+            placeholder="เช่น กรกฎาคม 2569"
+          />
+        </Field>
+
+        <div style={styles.fieldGrid}>
+          <Field label="ค่าเช่าห้อง (฿)">
+            <input style={styles.input} inputMode="decimal" value={form.rent} onChange={e => update('rent', e.target.value)} placeholder="0" />
+          </Field>
+          <Field label="ค่าน้ำ (฿)">
+            <input style={styles.input} inputMode="decimal" value={form.water} onChange={e => update('water', e.target.value)} placeholder="0" />
+          </Field>
+        </div>
+
+        <div style={styles.fieldGrid}>
+          <Field label="หน่วยไฟที่ใช้">
+            <input style={styles.input} inputMode="decimal" value={form.electricUnits} onChange={e => update('electricUnits', e.target.value)} placeholder="0" />
+          </Field>
+          <Field label="ราคาไฟ/หน่วย (฿)">
+            <input style={styles.input} inputMode="decimal" value={form.electricRate} onChange={e => update('electricRate', e.target.value)} placeholder="0" />
+          </Field>
+        </div>
+
+        <div style={styles.fieldGrid}>
+          <Field label="ค่าซ่อม (฿)">
+            <input style={styles.input} inputMode="decimal" value={form.repair} onChange={e => update('repair', e.target.value)} placeholder="0" />
+          </Field>
+          <Field label="อื่นๆ (฿)">
+            <input style={styles.input} inputMode="decimal" value={form.other} onChange={e => update('other', e.target.value)} placeholder="0" />
+          </Field>
+        </div>
+
+        <Field label="สถานะ">
+          <select style={styles.input} value={form.status} onChange={e => update('status', e.target.value)}>
+            <option value="pending">ค้างชำระ</option>
+            <option value="paid">ชำระแล้ว</option>
+          </select>
+        </Field>
+
+        <div style={styles.totalPreview}>
+          <span style={styles.totalPreviewLabel}>ยอดรวม</span>
+          <span style={styles.totalPreviewValue}>{total.toLocaleString()} ฿</span>
+        </div>
+
+        <button style={styles.submitBtn} type="submit" disabled={saving}>
+          {saving ? 'กำลังบันทึก...' : 'บันทึกบิล'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <label style={styles.fieldLabel}>{label}</label>
+      {children}
+    </div>
+  )
+}
+
+/* --------------------------------- Repairs Tab ---------------------------------- */
+
+const STATUS_META = {
+  pending: { label: 'รอดำเนินการ', color: '#e07a7a' },
+  in_progress: { label: 'กำลังซ่อม', color: '#e8a15a' },
+  done: { label: 'เสร็จสิ้น', color: '#4fd1c5' },
+}
+
+function RepairsTab({ repairs, onStatusChange }) {
+  if (repairs.length === 0) {
+    return (
+      <div style={styles.emptyCard}>
+        <p style={styles.emptyIcon}>🔧</p>
+        <p style={styles.emptyTitle}>ยังไม่มีรายการแจ้งซ่อม</p>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {repairs.map(r => {
+        const meta = STATUS_META[r.status] ?? STATUS_META.pending
+        return (
+          <div key={r.id} style={styles.repairRow}>
+            <div style={styles.repairTop}>
+              <span style={styles.repairRoom}>ห้อง {r.rooms?.room_number ?? '—'}</span>
+              <span style={{ ...styles.repairStatusPill, color: meta.color, borderColor: meta.color + '55', background: meta.color + '18' }}>
+                {meta.label}
+              </span>
+            </div>
+            <p style={styles.repairDesc}>{r.description}</p>
+            <p style={styles.repairDate}>
+              {r.created_at ? new Date(r.created_at).toLocaleString('th-TH') : ''}
+            </p>
+
+            <div style={styles.repairActions}>
+              {Object.entries(STATUS_META).map(([key, m]) => (
+                <button
+                  key={key}
+                  style={{
+                    ...styles.repairActionBtn,
+                    ...(r.status === key ? { borderColor: m.color, color: m.color } : {}),
+                  }}
+                  onClick={() => onStatusChange(r.id, key)}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ---------------------------------- Small bits ---------------------------------- */
+
+function FilterPill({ active, onClick, dot, children }) {
+  return (
+    <button
+      type="button"
+      style={{ ...styles.filterPill, ...(active ? styles.filterPillActive : {}) }}
+      onClick={onClick}
+    >
+      {dot && <span style={{ ...styles.filterPillDot, background: dot }} />}
+      {children}
+    </button>
+  )
+}
+
+function StatChip({ label, value, accent = '#c9a463' }) {
+  return (
+    <div style={styles.statChip}>
+      <p style={{ ...styles.statValue, color: accent }}>{value}</p>
+      <p style={styles.statLabel}>{label}</p>
     </div>
   )
 }
@@ -175,11 +620,9 @@ function FontImport() {
   return (
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap');
-      @keyframes cardRise {
-        from { opacity: 0; transform: translateY(14px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
       @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
       @media (prefers-reduced-motion: reduce) {
         * { animation: none !important; transition: none !important; }
       }
@@ -187,7 +630,7 @@ function FontImport() {
   )
 }
 
-const barcodeBars = [3, 6, 2, 8, 4, 2, 6, 3, 5, 2, 7, 4, 3, 6, 2, 8, 3, 5]
+/* ------------------------------------ Styles ------------------------------------ */
 
 const styles = {
   bg: {
@@ -204,7 +647,7 @@ const styles = {
     background: 'radial-gradient(700px 400px at 50% -10%, rgba(201,164,99,0.10), transparent)',
     pointerEvents: 'none',
   },
-  center: { display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 140 },
+  center: { display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 100 },
   spinner: {
     width: 22, height: 22, borderRadius: '50%',
     border: '2px solid rgba(201,164,99,0.25)', borderTopColor: '#c9a463',
@@ -213,90 +656,155 @@ const styles = {
 
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '22px 24px 8px', marginBottom: 22, position: 'relative', zIndex: 1,
+    padding: '22px 24px 8px', position: 'relative', zIndex: 1,
   },
   back: { background: 'none', border: 'none', color: '#c9a463', fontSize: 14, cursor: 'pointer', fontFamily: "'Noto Sans Thai', sans-serif" },
   title: { color: '#f2efe6', fontSize: 17, margin: 0, fontWeight: 600, letterSpacing: 0.2 },
+
+  statRow: {
+    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8,
+    padding: '4px 20px 18px', position: 'relative', zIndex: 1,
+  },
+  statChip: {
+    background: '#1b1f27', border: '1px solid rgba(255,255,255,0.06)',
+    borderRadius: 12, padding: '10px 6px', textAlign: 'center',
+  },
+  statValue: { fontSize: 19, fontWeight: 700, margin: 0, fontFamily: "'Space Grotesk', sans-serif" },
+  statLabel: { color: '#5b616c', fontSize: 10, margin: '4px 0 0' },
+
+  tabRow: {
+    display: 'flex', gap: 8, padding: '0 20px 18px', position: 'relative', zIndex: 1,
+    overflowX: 'auto',
+  },
+  tabBtn: {
+    flex: 1, whiteSpace: 'nowrap', padding: '10px 12px', borderRadius: 12,
+    border: '1px solid rgba(255,255,255,0.08)', background: '#1b1f27',
+    color: '#8b909b', fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+    fontFamily: "'Noto Sans Thai', sans-serif",
+  },
+  tabBtnActive: {
+    background: 'linear-gradient(135deg, rgba(201,164,99,0.22), rgba(201,164,99,0.08))',
+    borderColor: 'rgba(201,164,99,0.5)', color: '#e8cf9c',
+  },
+
   content: { padding: '0 20px', position: 'relative', zIndex: 1 },
 
+  // room filters
+  filterRow: { display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4, marginBottom: 10 },
+  filterPill: {
+    display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+    padding: '7px 14px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.08)',
+    background: '#1b1f27', color: '#8b909b', fontSize: 12, cursor: 'pointer',
+    fontFamily: "'Noto Sans Thai', sans-serif",
+  },
+  filterPillActive: {
+    background: 'linear-gradient(135deg, rgba(201,164,99,0.22), rgba(201,164,99,0.08))',
+    borderColor: 'rgba(201,164,99,0.5)', color: '#e8cf9c',
+  },
+  filterPillDot: { width: 6, height: 6, borderRadius: '50%' },
+
+  // room grid
+  roomGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 },
+  roomTile: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+    padding: '16px 8px', borderRadius: 14, cursor: 'pointer',
+    fontFamily: "'Noto Sans Thai', sans-serif", border: '1px solid rgba(255,255,255,0.06)',
+  },
+  roomTileVacant: { background: 'rgba(79,209,197,0.07)', border: '1px solid rgba(79,209,197,0.25)' },
+  roomTileOccupied: { background: 'rgba(232,161,90,0.07)', border: '1px solid rgba(232,161,90,0.25)' },
+  roomTileNum: { color: '#f2efe6', fontSize: 18, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" },
+  roomTileDot: { width: 6, height: 6, borderRadius: '50%' },
+  roomTileStatus: { color: '#8b909b', fontSize: 10.5 },
+
+  // sheet (bottom modal)
+  sheetBackdrop: {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+    display: 'flex', alignItems: 'flex-end', zIndex: 50, animation: 'fadeIn 0.2s ease-out',
+  },
+  sheet: {
+    width: '100%', maxWidth: 480, margin: '0 auto', background: '#1b1f27',
+    borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '10px 22px 26px',
+    border: '1px solid rgba(201,164,99,0.2)', borderBottom: 'none',
+    animation: 'sheetUp 0.25s ease-out',
+  },
+  sheetHandle: { width: 40, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.15)', margin: '0 auto 18px' },
+  sheetTopRow: { display: 'flex', justifyContent: 'space-between', marginBottom: 6 },
+  sheetRoomNum: { color: '#f2efe6', fontSize: 40, fontWeight: 700, margin: '0 0 16px', fontFamily: "'Space Grotesk', sans-serif" },
+  sheetInfoRow: { display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' },
+  sheetInfoLabel: { color: '#5b616c', fontSize: 12.5 },
+  sheetInfoValue: { color: '#f2efe6', fontSize: 13.5, fontWeight: 600 },
+  sheetCloseBtn: {
+    width: '100%', marginTop: 18, padding: '13px', borderRadius: 12,
+    border: '1px solid rgba(255,255,255,0.1)', background: 'transparent',
+    color: '#8b909b', fontSize: 13.5, cursor: 'pointer', fontFamily: "'Noto Sans Thai', sans-serif",
+  },
+
+  eyebrow: { color: '#c9a463', fontSize: 11, letterSpacing: 1.5, fontWeight: 600, textTransform: 'uppercase' },
+  serial: { color: '#5b616c', fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" },
+
+  dangerBtn: {
+    width: '100%', marginTop: 18, padding: '13px', borderRadius: 12, border: '1px solid rgba(224,122,122,0.4)',
+    background: 'rgba(224,122,122,0.1)', color: '#e07a7a', fontSize: 13.5, fontWeight: 600,
+    cursor: 'pointer', fontFamily: "'Noto Sans Thai', sans-serif",
+  },
+
+  // form card
   card: {
-    position: 'relative',
-    background: 'linear-gradient(165deg, #232833, #171a21)',
-    border: '1px solid rgba(201,164,99,0.22)',
-    borderRadius: 22,
-    overflow: 'hidden',
-    marginBottom: 20,
-    animation: 'cardRise 0.5s ease-out',
-    boxShadow: '0 20px 50px rgba(0,0,0,0.35)',
+    position: 'relative', background: 'linear-gradient(165deg, #232833, #171a21)',
+    border: '1px solid rgba(201,164,99,0.22)', borderRadius: 22, overflow: 'hidden',
+    marginBottom: 20, boxShadow: '0 20px 50px rgba(0,0,0,0.35)',
   },
-  cardTopStripe: {
-    height: 5,
-    background: 'linear-gradient(90deg, #8a7448, #c9a463, #e8cf9c, #c9a463, #8a7448)',
-  },
-  cardTop: { padding: '22px 24px 26px' },
-  cardTopRow: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18,
-  },
-  eyebrow: {
-    color: '#c9a463', fontSize: 11, letterSpacing: 1.5, fontWeight: 600, textTransform: 'uppercase',
-  },
-  serial: { color: '#5b616c', fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 0.5 },
-  total: {
-    color: '#f2efe6', fontSize: 46, fontWeight: 700, margin: '0 0 16px',
-    fontFamily: "'Space Grotesk', sans-serif", letterSpacing: -1,
-  },
-  paidPill: {
-    display: 'inline-flex', alignItems: 'center', gap: 7,
-    background: 'rgba(79,209,197,0.12)', border: '1px solid rgba(79,209,197,0.3)',
-    color: '#7fe0d5', padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500,
-  },
-  pendingPill: {
-    display: 'inline-flex', alignItems: 'center', gap: 7,
-    background: 'rgba(232,161,90,0.12)', border: '1px solid rgba(232,161,90,0.3)',
-    color: '#f0bd8a', padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500,
-  },
-  statusDot: { width: 6, height: 6, borderRadius: '50%' },
-
-  perfRow: { position: 'relative', display: 'flex', alignItems: 'center', height: 0 },
-  perfLine: { flex: 1, borderTop: '2px dashed rgba(201,164,99,0.25)' },
-  notchLeft: { position: 'absolute', left: -12, top: -12, width: 24, height: 24, borderRadius: '50%', background: '#12151b' },
-  notchRight: { position: 'absolute', right: -12, top: -12, width: 24, height: 24, borderRadius: '50%', background: '#12151b' },
-
-  lineItems: { padding: '22px 24px 6px' },
-  lineRow: { display: 'flex', justifyContent: 'space-between', marginBottom: 14 },
-  lineLabel: { color: '#8b909b', fontSize: 13.5 },
-  lineValue: { color: '#f2efe6', fontSize: 13.5, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace" },
-
-  barcode: {
-    display: 'flex', alignItems: 'flex-end', gap: 3,
-    padding: '10px 24px 18px', height: 20, opacity: 0.5,
-  },
-  barcodeBar: { height: '100%', background: 'rgba(201,164,99,0.5)', borderRadius: 1 },
-
-  sectionLabel: {
-    color: '#5b616c', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', margin: '4px 0 12px',
-  },
-  pastCard: {
+  cardTopStripe: { height: 5, background: 'linear-gradient(90deg, #8a7448, #c9a463, #e8cf9c, #c9a463, #8a7448)' },
+  fieldGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
+  totalPreview: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    background: '#1b1f27', border: '1px solid rgba(255,255,255,0.06)',
-    borderRadius: 14, padding: '14px 18px', marginBottom: 10,
+    background: 'rgba(201,164,99,0.08)', border: '1px solid rgba(201,164,99,0.25)',
+    borderRadius: 12, padding: '12px 16px', margin: '4px 0 18px',
   },
-  pastMonth: { color: '#8b909b', fontSize: 12.5, margin: '0 0 4px' },
-  pastTotal: { color: '#f2efe6', fontSize: 16, fontWeight: 700, margin: 0, fontFamily: "'Space Grotesk', sans-serif" },
-  paidPillSmall: {
-    background: 'rgba(79,209,197,0.12)', border: '1px solid rgba(79,209,197,0.3)',
-    color: '#7fe0d5', padding: '4px 12px', borderRadius: 20, fontSize: 11,
+  totalPreviewLabel: { color: '#c9a463', fontSize: 12.5, fontWeight: 600 },
+  totalPreviewValue: { color: '#f2efe6', fontSize: 18, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" },
+  fieldLabel: { display: 'block', color: '#8b909b', fontSize: 12, marginBottom: 6 },
+  input: {
+    width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)',
+    background: '#12151b', color: '#f2efe6', fontSize: 14, fontFamily: "'Noto Sans Thai', sans-serif",
+    boxSizing: 'border-box',
   },
-  pendingPillSmall: {
-    background: 'rgba(232,161,90,0.12)', border: '1px solid rgba(232,161,90,0.3)',
-    color: '#f0bd8a', padding: '4px 12px', borderRadius: 20, fontSize: 11,
+  submitBtn: {
+    width: '100%', padding: '15px', borderRadius: 14, border: 'none',
+    background: 'linear-gradient(135deg, #c9a463, #8a7448)', color: '#14171c',
+    fontSize: 15, fontWeight: 700, cursor: 'pointer', marginTop: 6,
+    fontFamily: "'Noto Sans Thai', sans-serif", boxShadow: '0 8px 24px rgba(201,164,99,0.25)',
+  },
+
+  // repairs
+  repairRow: {
+    background: '#1b1f27', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 16,
+    padding: '16px 18px', marginBottom: 12,
+  },
+  repairTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  repairRoom: { color: '#f2efe6', fontSize: 14.5, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" },
+  repairStatusPill: { fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 20, border: '1px solid' },
+  repairDesc: { color: '#d8d5c9', fontSize: 13.5, lineHeight: 1.6, margin: '0 0 6px' },
+  repairDate: { color: '#5b616c', fontSize: 11, margin: '0 0 12px' },
+  repairActions: { display: 'flex', gap: 8 },
+  repairActionBtn: {
+    flex: 1, padding: '8px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)',
+    background: 'transparent', color: '#8b909b', fontSize: 11.5, cursor: 'pointer',
+    fontFamily: "'Noto Sans Thai', sans-serif",
   },
 
   emptyCard: {
-    textAlign: 'center', marginTop: 60, padding: '40px 24px',
-    background: '#1b1f27', border: '1px dashed rgba(255,255,255,0.12)', borderRadius: 20,
+    textAlign: 'center', marginTop: 60, padding: '40px 24px', background: '#1b1f27',
+    border: '1px dashed rgba(255,255,255,0.12)', borderRadius: 20,
   },
-  emptyIcon: { fontSize: 34, color: '#5b616c', margin: '0 0 14px' },
-  emptyTitle: { color: '#f2efe6', fontSize: 15, fontWeight: 600, margin: '0 0 6px' },
-  emptyBody: { color: '#5b616c', fontSize: 13, margin: 0 },
+  emptyIcon: { fontSize: 34, margin: '0 0 14px' },
+  emptyTitle: { color: '#f2efe6', fontSize: 15, fontWeight: 600, margin: 0 },
+
+  toast: {
+    position: 'fixed', bottom: 28, left: '50%', transform: 'translateX(-50%)',
+    background: '#232833', border: '1px solid rgba(79,209,197,0.35)', color: '#f2efe6',
+    padding: '12px 20px', borderRadius: 12, fontSize: 13, zIndex: 60,
+    boxShadow: '0 10px 30px rgba(0,0,0,0.4)', animation: 'fadeIn 0.2s ease-out',
+  },
+  toastErr: { border: '1px solid rgba(224,122,122,0.4)' },
 }

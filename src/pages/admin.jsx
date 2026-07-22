@@ -35,7 +35,7 @@ const TABS = [
 ]
 
 export default function AdminPage() {
-  const { user } = useAuth()
+  const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [tab, setTab] = useState('rooms')
 
@@ -70,6 +70,11 @@ export default function AdminPage() {
     setTimeout(() => setToast(null), 2600)
   }
 
+  const handleLogout = async () => {
+    await logout()
+    navigate('/admin-login', { replace: true })
+  }
+
   // room_id -> tenant row
   const tenantByRoom = useMemo(() => {
     const map = {}
@@ -86,9 +91,8 @@ export default function AdminPage() {
       <div style={styles.vignette} />
 
       <div style={styles.header}>
-        <button style={styles.back} onClick={() => navigate('/main')}>← กลับ</button>
         <h2 style={styles.title}>แผงควบคุมผู้ดูแล</h2>
-        <div style={{ width: 40 }} />
+        <button style={styles.logoutBtn} onClick={handleLogout}>ออกจากระบบ</button>
       </div>
 
       {/* Stat strip */}
@@ -658,8 +662,15 @@ const styles = {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '22px 24px 8px', position: 'relative', zIndex: 1,
   },
-  back: { background: 'none', border: 'none', color: '#c9a463', fontSize: 14, cursor: 'pointer', fontFamily: "'Noto Sans Thai', sans-serif" },
   title: { color: '#f2efe6', fontSize: 17, margin: 0, fontWeight: 600, letterSpacing: 0.2 },
+  logoutBtn: {
+    background: 'none',
+    border: 'none',
+    color: '#e07a7a',
+    fontSize: 13,
+    cursor: 'pointer',
+    fontFamily: "'Noto Sans Thai', sans-serif",
+  },
 
   statRow: {
     display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8,

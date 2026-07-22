@@ -42,6 +42,11 @@ export default function AdminLoginPage() {
     }
   }
 
+  const handleLogout = async () => {
+    setError('')
+    await logout()
+  }
+
   return (
     <div style={styles.bg}>
       <FontImport />
@@ -87,8 +92,8 @@ export default function AdminLoginPage() {
               </button>
             </form>
 
-            <button style={styles.backLink} onClick={() => navigate('/login')}>
-              ← กลับไปหน้าเข้าสู่ระบบผู้พักอาศัย
+            <button style={styles.backLink} onClick={handleLogout}>
+              ออกจากระบบ
             </button>
           </div>
         </div>
